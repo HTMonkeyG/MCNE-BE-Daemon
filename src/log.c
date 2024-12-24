@@ -1,10 +1,6 @@
 #include "log.h"
 
-typedef enum {
-  END = -1
-} LogState;
-
-void logInfo(char* pattern, ...) {
+void logInfo(const char* pattern, ...) {
   char buf[512];
   va_list arguments;
   int length;
@@ -17,7 +13,7 @@ void logInfo(char* pattern, ...) {
   printf("[INFO] %s", buf);
 }
 
-void logWarning(char* pattern, ...) {
+void logWarning(const char* pattern, ...) {
   char buf[512];
   va_list arguments;
   int length;
@@ -30,7 +26,7 @@ void logWarning(char* pattern, ...) {
   printf("[WARN] %s", buf);
 }
 
-void logError(char* pattern, ...) {
+void logError(const char* pattern, ...) {
   char buf[512];
   va_list arguments;
   int length;

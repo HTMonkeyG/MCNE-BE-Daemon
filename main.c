@@ -7,7 +7,11 @@
 #include <psapi.h>
 #include "src/reg.h"
 #include "src/log.h"
+#include "src/config.h"
+#include "src/process.h"
 
+static const char INSTANCE_NAME[21] = "MCNE-BE-Daemon-Mutex";
+static const char CONFIG_NAME[12] = "\\config.txt";
 static const char MCNE_FG_PROCNAME1[23] = "FeverGamesLauncher.exe";
 static const char MCNE_FG_PROCNAME2[17] = "FeverGamesWeb.exe";
 static const char MCNE_FG_PROCNAME3[24] = "FeverGamesInstaller.exe";
@@ -16,97 +20,20 @@ static const char MCNE_BE_PROCNAME[22] = "Minecraft.Windows.exe";
 static const char MCNE_BE_REGPATH[28] = "SOFTWARE\\Netease\\MCLauncher";
 static const char MCNE_BE_REGKEY[23] = "MinecraftBENeteasePath";
 
-BOOL IsRunAsAdmin(HANDLE hProcess) {
-  if (!hProcess)
-    hProcess = GetCurrentProcess();
-  BOOL bElevated = FALSE;
-  // Get current process token
-  HANDLE hToken = NULL;
-  if (!OpenProcessToken(hProcess, TOKEN_QUERY, &hToken))
-    return FALSE;
-  TOKEN_ELEVATION tokenEle;
-  // Retrieve token elevation information  
-  DWORD dwRetLen = 0;
-  if (GetTokenInformation(hToken, TokenElevation, &tokenEle, sizeof(tokenEle), &dwRetLen))
-    if (dwRetLen == sizeof(tokenEle))
-      bElevated = tokenEle.TokenIsElevated;
-  CloseHandle(hToken);
-  return bElevated;
-}
-
-// Run as admin
-void ManagerRun(LPCSTR exe, LPCSTR param, INT nShow) {
-  SHELLEXECUTEINFO ShExecInfo;
-  ShExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
-  ShExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
-  ShExecInfo.hwnd = NULL;
-  ShExecInfo.lpVerb = "runas";
-  ShExecInfo.lpFile = exe;
-  ShExecInfo.lpParameters = param;
-  ShExecInfo.lpDirectory = NULL;
-  ShExecInfo.nShow = nShow;
-  ShExecInfo.hInstApp = NULL;
-  BOOL ret = ShellExecuteEx(&ShExecInfo);
-  CloseHandle(ShExecInfo.hProcess);
-}
-
-void runCommand(char* command) {
-  STARTUPINFOW a;
-  PROCESS_INFORMATION pi;
-  CreateProcessW(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &a, &pi);
-}
-
-DWORD testRunning(char* exeFile) {
-  PROCESSENTRY32 pe32;
-  pe32.dwSize = sizeof(pe32);
-  HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-  if (hProcessSnap == INVALID_HANDLE_VALUE) {
-    LOGE("CreateToolhelp32Snapshot invoke failed.\n");
-  }
-  BOOL bMore = Process32First(hProcessSnap, &pe32);
-  int l1 = strlen(exeFile), l2;
-
-  while (bMore) {
-    l2 = strlen(pe32.szExeFile);
-    if (!memcmp(pe32.szExeFile, exeFile, l1 > l2 ? l2 : l1)) {
-      CloseHandle(hProcessSnap);
-      return pe32.th32ProcessID;
-    }
-    bMore = Process32Next(hProcessSnap, &pe32);
-  }
-  CloseHandle(hProcessSnap);
-  return -1;
-}
-
-char setProcessSuspend(DWORD dwProcessID, BOOL fSuspend) {
-  HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, dwProcessID);
-
-  if (hSnapshot != INVALID_HANDLE_VALUE) {
-    THREADENTRY32 te = { sizeof(te) };
-    BOOL fOk = Thread32First(hSnapshot, &te);
-    for (; fOk; fOk = Thread32Next(hSnapshot, &te)) {
-      if (te.th32OwnerProcessID == dwProcessID) {
-        HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME,FALSE, te.th32ThreadID);
-        if (hThread != NULL)
-          fSuspend ? SuspendThread(hThread) : ResumeThread(hThread);
-        CloseHandle(hThread);
-      }
-    }
-  }
-  CloseHandle(hSnapshot);
-
-  return 1;
-}
-
-void WINAPI DaemonThread(LPVOID lpParam) {
+long unsigned int WINAPI DaemonThread(LPVOID lpParam) {
   LOGI("Daemon running in background.\n");
+  HWND consoleWnd = GetConsoleWindow();
+  ShowWindow(consoleWnd, SW_HIDE);
 
   while (1) {
-    DWORD procId = testRunning(MCNE_BE_PROCNAME);
+    DWORD procId = proc_getRunningState(MCNE_BE_PROCNAME);
     if (procId != -1) {
-      setProcessSuspend(procId, TRUE);
+      ShowWindow(consoleWnd, SW_SHOW);
+      SetWindowPos(consoleWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+      proc_setProcessSuspend(procId, TRUE);
       Sleep(5000);
-      setProcessSuspend(procId, FALSE);
+      proc_setProcessSuspend(procId, FALSE);
+      ShowWindow(consoleWnd, SW_HIDE);
       while (1);
 
         /*HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, procId);
@@ -135,15 +62,62 @@ void WINAPI DaemonThread(LPVOID lpParam) {
 }
 
 int main(int argc, char *argv[]) {
-  if (!IsRunAsAdmin(NULL)) {
+  HWND consoleWnd = GetConsoleWindow();
+  SetWindowText(consoleWnd, "MCNE-BE Daemon");
+
+  HANDLE mutexHandle = CreateMutex(NULL, TRUE, INSTANCE_NAME);
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    // Only allows one instance running
+    ShowWindow(consoleWnd, SW_HIDE);
+    MessageBox(
+      consoleWnd,
+      "An instance of MCNE-BE Daemon has already running.",
+      "Instance exists",
+      MB_OK
+    );
+    return 1;
+  }
+
+  if (!proc_isRunAsAdmin(NULL)) {
     // Reopen with admin
-    ShowWindow(GetConsoleWindow(), SW_HIDE);
-    ManagerRun(argv[0], "2", SW_SHOWNORMAL);
+    ShowWindow(consoleWnd, SW_HIDE);
+    proc_runAsAdmin(argv[0], "2", SW_SHOWNORMAL);
     return 1;
   } else {
-    //ShowWindow(GetConsoleWindow(), SW_HIDE);
-    // Read MCNE-BE install path.
+    char appDataPath[MAX_PATH];
+    char szModulePath[MAX_PATH];
 
+    if (SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, 0, appDataPath) < 0) {
+      LOGE("Read APPDATA path failed.\n");
+      goto EXCEPTION;
+    }
+
+    if (!GetModuleFileName(NULL, szModulePath, MAX_PATH)) {
+      LOGE("Read current path failed.\n");
+      goto EXCEPTION;
+    }
+
+    char *temp = strrchr(szModulePath, '\\');
+    if (temp)
+      memcpy(temp, CONFIG_NAME, 12);
+
+    // Read config.txt
+    LOGI("Reading config.\n");
+    DaemonConfigTypedef config;
+    if (!cfgDeserialize(szModulePath, &config)) {
+      LOGE("Read config failed.\n");
+      goto EXCEPTION;
+    }
+    if (!cfgValidate(&config)) {
+      LOGE("Invalid config.\n");
+      goto EXCEPTION;
+    }
+    LOGI("Fever Games start command: %s\n", config.fgLaunchCmd);
+    LOGI("WPFLauncher start command: %s\n", config.wpfLaunchCmd);
+    LOGI("Default option file: %s\n", config.defaultOption);
+
+    // Read MCNE-BE install path.
+    LOGI("Reading registry.\n");
     RegRW reg;
     char mcbeRootPath[256];
     reg.size = 256;
@@ -154,34 +128,32 @@ int main(int argc, char *argv[]) {
     }
     LOGI("Got MCNE-BE install root path: %s\n", mcbeRootPath);
 
-    FILE* pf = fopen("test.txt", "r");
-
-    LOGI("Waiting for Fucker Games to launch.\n");
-    if (testRunning(MCNE_FG_PROCNAME2) == -1 || testRunning(MCNE_FG_PROCNAME3) == -1) {
-      system("I:\\FeverGames\\FeverGamesLauncher.exe");
-      while (testRunning(MCNE_FG_PROCNAME2) == -1 || testRunning(MCNE_FG_PROCNAME3) == -1)
-        Sleep(200);
+    // Wait for fever game
+    LOGI("Waiting for Fucker Games to launch.");
+    if (proc_getRunningState(MCNE_FG_PROCNAME2) == -1 || proc_getRunningState(MCNE_FG_PROCNAME3) == -1) {
+      system(config.fgLaunchCmd);
+      while (proc_getRunningState(MCNE_FG_PROCNAME2) == -1 || proc_getRunningState(MCNE_FG_PROCNAME3) == -1)
+        Sleep(200), printf(".");
     }
+    printf("\n");
     LOGI("Fucker Games launched.\n");
 
-    LOGI("Starting MCNE launcher.\n");
-    if (testRunning(MCNE_LC_PROCCNAME) == -1) {
-      system("start steam://rungameid/16866318300634677248");
-      while (testRunning(MCNE_LC_PROCCNAME) == -1)
-        Sleep(200);
+    Sleep(1000);
+
+    // Wait for WPFLauncher
+    LOGI("Starting MCNE launcher.");
+    if (proc_getRunningState(MCNE_LC_PROCCNAME) == -1) {
+      system(config.wpfLaunchCmd);
+      while (proc_getRunningState(MCNE_LC_PROCCNAME) == -1)
+        Sleep(500), printf(".");
     }
+    printf("\n");
     LOGI("MCNE launcher started.\n");
 
-    
-    char path[MAX_PATH];
-    if (SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, 0, path) >= 0) {
-      printf("%s\n", path);
-    }
+    Sleep(500);
 
-    HANDLE hThread;
     DWORD threadId;
- 
-    hThread = CreateThread(NULL, 0, DaemonThread, NULL, 0, &threadId);
+    HANDLE hThread = CreateThread(NULL, 0, DaemonThread, NULL, 0, &threadId);
 
     if (hThread == NULL) {
       LOGE("Create deamon failed: %d\n", GetLastError());
@@ -191,8 +163,11 @@ int main(int argc, char *argv[]) {
     WaitForSingleObject(hThread, INFINITE);
     CloseHandle(hThread);
   }
-EXCEPTION:
-  while (1);
 
+EXCEPTION:
+  ShowWindow(consoleWnd, SW_SHOW);
+  while (1);
+  ReleaseMutex(mutexHandle);
+  CloseHandle(mutexHandle);
   return 0;
 }

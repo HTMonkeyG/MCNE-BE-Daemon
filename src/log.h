@@ -5,6 +5,6 @@
 #define LOGW logWarning
 #define LOGE logError
 
-void logInfo(char* pattern, ...);
-void logWarning(char* pattern, ...);
-void logError(char* pattern, ...);
+void logInfo(const char* pattern, ...);
+void logWarning(const char* pattern, ...);
+void logError(const char* pattern, ...);
