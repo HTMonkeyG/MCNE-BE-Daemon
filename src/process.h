@@ -5,4 +5,5 @@
 BOOL proc_isRunAsAdmin(HANDLE hProcess);
 VOID proc_runAsAdmin(LPCSTR exe, LPCSTR param, INT nShow);
 DWORD proc_getRunningState(LPCSTR exeFile);
+BOOL proc_getExeFilePath(DWORD procId, char* path, int bufferSize);
 BOOL proc_setProcessSuspend(DWORD dwProcessID, BOOL fSuspend);

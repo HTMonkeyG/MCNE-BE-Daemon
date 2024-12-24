@@ -1,4 +1,4 @@
-DIST_DIR = ./dist
+DIST_DIR = dist
 SRC_DIR = ./src
  
 SRC = $(wildcard $(SRC_DIR)/*.c) ./main.c
@@ -24,3 +24,7 @@ dist/icon.o: $(SRC_DIR)/icon/mcne.ico $(SRC_DIR)/icon/icon.rc
 clean:
 	del .\dist\*.o
 	del .\dist\main.exe
+
+# Compile and execute
+cexec: $(BIN_TARGET)
+	$(DIST_DIR)\main.exe
